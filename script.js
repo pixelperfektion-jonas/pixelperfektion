@@ -607,22 +607,21 @@ function initNavMenu() {
 
       // NEU: ARIA - Status auf "geöffnet" setzen
       navToggle.setAttribute("aria-expanded", "true");
-      navToggle.setAttribute("aria-label", "Menü schließen"); // Label für Screenreader anpassen
+      navToggle.setAttribute("aria-label", "Menü schließen");
 
       document.addEventListener("keydown", trapFocus);
 
       setTimeout(() => {
-        const firstMenuLink = navMenu.querySelector("a[href]");
-        if (firstMenuLink) firstMenuLink.focus();
+        navMenu.setAttribute("tabindex", "-1");
+        navMenu.style.outline = "none";
+        navMenu.focus({ preventScroll: true });
       }, 100);
     } else {
       // Menü SCHLIESSEN
       navMenuAnimation.reverse();
       menuOpen = false;
-
-      // NEU: ARIA - Status auf "geschlossen" setzen
       navToggle.setAttribute("aria-expanded", "false");
-      navToggle.setAttribute("aria-label", "Menü öffnen"); // Label für Screenreader anpassen
+      navToggle.setAttribute("aria-label", "Menü öffnen");
 
       document.removeEventListener("keydown", trapFocus);
       navToggle.focus();
@@ -666,7 +665,7 @@ function initNavMenu() {
       });
 
       navMenuAnimation
-        .from(navMenu, { duration: 0.6, opacity: 0, ease: "quint.inOut" })
+        .from(navMenu, { duration: 0.5, opacity: 0, ease: "quint.inOut" })
         .to(".dot-1", { x: 4, duration: 0.3, ease: "back.in" }, "<")
         .to(".dot-3", { x: -4, duration: 0.3, ease: "back.in" }, "<")
         .to(".dot-1", { x: 0, y: -4, duration: 0.3, ease: "back.out" })
@@ -678,7 +677,7 @@ function initNavMenu() {
           {
             opacity: 0,
             yPercent: 50,
-            duration: 0.6,
+            duration: 0.5,
             stagger: 0.1,
             ease: "quint.out",
           },
@@ -686,12 +685,12 @@ function initNavMenu() {
         )
         .from(
           ".nav-menu_mail",
-          { opacity: 0, yPercent: 50, duration: 0.6, ease: "quint.out" },
+          { opacity: 0, yPercent: 50, duration: 0.5, ease: "quint.out" },
           "<0.2"
         )
         .from(
           ".nav-menu_legal",
-          { opacity: 0, yPercent: 50, duration: 0.6, ease: "quint.out" },
+          { opacity: 0, yPercent: 50, duration: 0.5, ease: "quint.out" },
           "<0.2"
         );
 
