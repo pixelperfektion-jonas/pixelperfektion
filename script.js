@@ -415,7 +415,17 @@ function initLenis() {
   if (!hasLenis) return;
   if (reducedMotion) return;
 
-  lenis = new Lenis();
+  lenis = new Lenis({
+    prevent: (node) => {
+      return (
+        node.id === "usercentrics-root" ||
+        node.tagName?.toLowerCase() === "usercentrics-root" ||
+        node.closest("#usercentrics-root") !== null ||
+        node.closest("usercentrics-root") !== null ||
+        node.classList?.contains("uc-modal")
+      );
+    },
+  });
 
   if (hasScrollTrigger) {
     lenis.on("scroll", ScrollTrigger.update);
@@ -1212,6 +1222,11 @@ function initCalendarDate() {
 }
 
 function initHoverImageFollow() {
+  const isHoverSupported = window.matchMedia(
+    "(hover: hover) and (pointer: fine)"
+  ).matches;
+  if (!isHoverSupported) return;
+
   const hoverImageTargets = nextPage.querySelectorAll(
     "[data-hover-image-target]"
   );
@@ -1228,6 +1243,18 @@ function initHoverImageFollow() {
     let playTimeout;
 
     if (video) {
+      let src =
+        hoverImage.getAttribute("data-video-src") ||
+        video.getAttribute("data-video-src");
+
+      if (src && !video.src) {
+        video.src = src;
+
+        if (typeof video.load === "function") {
+          video.load();
+        }
+      }
+
       hoverImageTarget.addEventListener("mouseenter", () => {
         clearTimeout(pauseTimeout);
         playTimeout = setTimeout(() => {
@@ -2095,24 +2122,24 @@ function initArchivePreview() {
 }
 
 function initVideo() {
-  nextPage.querySelectorAll("[data-video-src]").forEach((el) => {
-    const video = el.tagName === "VIDEO" ? el : el.querySelector("video");
-    if (!video) return;
+  nextPage
+    .querySelectorAll("[data-video-src]:not([data-hover])")
+    .forEach((el) => {
+      const video = el.tagName === "VIDEO" ? el : el.querySelector("video");
+      if (!video) return;
 
-    let src = el.getAttribute("data-video-src");
+      let src = el.getAttribute("data-video-src");
 
-    if (!src) return;
+      if (!src) return;
 
-    // nur setzen wenn noch kein src existiert
-    if (!video.src) {
-      video.src = src;
+      if (!video.src) {
+        video.src = src;
 
-      // load nur wenn verfügbar
-      if (typeof video.load === "function") {
-        video.load();
+        if (typeof video.load === "function") {
+          video.load();
+        }
       }
-    }
-  });
+    });
 }
 
 function initProjectButtons() {
