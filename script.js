@@ -1830,7 +1830,7 @@ function initSwiperSlider() {
       pagination: {
         el: pagination,
         type: "bullets",
-        clickable: true,
+        clickable: false,
         dynamicBullets: true,
         dynamicMainBullets: 3,
       },
