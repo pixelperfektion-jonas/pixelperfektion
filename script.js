@@ -1806,7 +1806,7 @@ function initSwiperSlider() {
       watchOverflow: true,
       spaceBetween: initialGap,
       speed: 800,
-      ally: {
+      a11y: {
         slideRole: "listitem",
       },
       mousewheel: {
