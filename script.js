@@ -83,6 +83,7 @@ function initBeforeEnterFunctions(next) {
   if (has(".ufo-img")) prepareUfoAnimation();
   if (has("[data-current-year]")) initDynamicCurrentYear();
   if (has(".seo-header")) initSeoHeaderLoader();
+  if (has("[data-pp-lens]")) initPpLens();
 }
 
 function initAfterEnterFunctions(next) {
@@ -112,6 +113,7 @@ function initAfterEnterFunctions(next) {
   if (has(".hero-slide")) initHeroParallaxSlider();
   if (has("[data-reveal-group]")) initContentRevealScroll();
   if (has(".process-item")) initProcessNumbers();
+  if (has("[data-odometer-group]")) initNumberOdometer();
 
   if (hasLenis && lenis) {
     lenis.resize();
@@ -125,6 +127,7 @@ function initAfterEnterFunctions(next) {
 // -----------------------------------------
 // PAGE TRANSITIONS
 // -----------------------------------------
+
 
 function runPageOnceAnimation(data) {
   const tl = gsap.timeline();
@@ -180,6 +183,83 @@ function runPageEnterAnimation(data) {
   });
 }
 
+function runNewsPageLeaveAnimation(current, next) {
+  const transitionWrap = document.querySelector("[data-transition-wrap]");
+  const transitionDark = transitionWrap.querySelector("[data-transition-dark]");
+
+  const tl = gsap.timeline({
+    onComplete: () => {
+      current.remove(); 
+    }
+  })
+  
+  CustomEase.create("parallax", "0.7, 0.05, 0.13, 1");
+  
+  if (reducedMotion) {
+    // Immediate swap behavior if user prefers reduced motion
+    return tl.set(current, { autoAlpha: 0 });
+  }
+  
+  tl.set(transitionWrap, {
+    zIndex: 2
+  });
+  
+  tl.fromTo(transitionDark, {
+    autoAlpha: 0
+  },{
+    autoAlpha: 0.8,
+    duration: 1.2,
+    ease: "parallax"
+  }, 0);
+  
+  tl.fromTo(current,{
+    y: "0vh"
+  },{
+    y: "-25vh",
+    duration: 1.2,
+    ease: "parallax",
+  }, 0);
+  
+  tl.set(transitionDark, {
+    autoAlpha: 0,
+  });
+
+  return tl;
+}
+
+function runNewsPageEnterAnimation(next){
+  const tl = gsap.timeline();
+  
+  if (reducedMotion) {
+    // Immediate swap behavior if user prefers reduced motion
+    tl.set(next, { autoAlpha: 1 });
+    tl.add("pageReady")
+    tl.call(resetPage, [next], "pageReady");
+    return new Promise(resolve => tl.call(resolve, null, "pageReady"));
+  }
+  
+  tl.add("startEnter", 0);
+  
+  tl.set(next, {
+    zIndex: 3
+  });
+  
+  tl.fromTo(next, {
+    y: "100vh"
+  }, {
+    y: "0vh",
+    duration: 1.2,
+    clearProps: "all",
+    ease: "parallax"
+  }, "startEnter");
+
+  tl.add("pageReady");
+  tl.call(resetPage, [next], "pageReady");
+
+  return new Promise(resolve => {
+    tl.call(resolve, null, "pageReady");
+  });
+}
 // -----------------------------------------
 // BARBA HOOKS + INIT
 // -----------------------------------------
@@ -235,7 +315,7 @@ barba.hooks.afterEnter((data) => {
 });
 
 barba.init({
-  debug: false, // Set to 'false' in production
+  debug: true, // Set to 'false' in production
   timeout: 7000,
   preventRunning: true,
   transitions: [
@@ -266,6 +346,34 @@ barba.init({
         }
         return runPageEnterAnimation(data);
       },
+    },
+
+    {
+      name: "news-transition",
+      from: {
+        namespace: ["news-overview", "news"]
+      },
+      to: {
+        namespace: ["news", "news-overview"]
+      },
+      sync: true,
+
+      // First load
+      async once(data) {
+        initOnceFunctions();
+
+        return runPageOnceAnimation(data.next.container);
+      },
+
+      // Current page leaves
+      async leave(data) {
+        return runNewsPageLeaveAnimation(data.current.container, data.next.container);
+      },
+
+      // New page enters
+      async enter(data) {
+        return runNewsPageEnterAnimation(data.next.container);
+      }
     },
 
     {
@@ -731,9 +839,6 @@ function initNavMenu() {
       document.removeEventListener("keydown", trapFocus);
       navMenu.style.display = "";
       navMenu.classList.add("disabled");
-
-      // NEU: ARIA - Auf Desktop das Menü für Screenreader wieder normal lesbar machen
-      // (da es hier meistens eine normale horizontale Nav-Leiste ist)
       navMenu.removeAttribute("aria-hidden");
 
       if (typeof lenis !== "undefined") lenis.start();
@@ -4423,17 +4528,785 @@ function initContentRevealScroll() {
   return () => ctx.revert();
 }
 
-function initProcessNumbers() {
-  const processItems = document.querySelectorAll(".process-item");
-  if (!processItems) return;
+function initPpLens() {
+  var lensNodes = document.querySelectorAll("[data-pp-lens]");
+  var lensCanvas = document.getElementById("pp-lens-canvas");
+  
+  if (lensNodes.length === 0 && !lensCanvas) {
+    return;
+  }
 
-  processItems.forEach((item, index) => {
-    const number = (index + 1).toString().padStart(2, "0");
+  "use strict";
 
-    const numberEl = item.querySelector(".process-number");
+  var ROOT_ATTR = "data-pp-lens-ready";
 
-    if (numberEl) {
-      numberEl.textContent = number;
+  var PALETTE = {
+    A: new Float32Array([150 / 255, 175 / 255, 185 / 255]),
+    M: new Float32Array([255 / 255, 232 / 255, 198 / 255]),
+    B: new Float32Array([224 / 255, 158 / 255, 84 / 255]),
+    C: new Float32Array([5 / 255, 5 / 255, 6 / 255]),
+    ACC: 1,
+    CD: 0.12,
+    EB: 1.25
+  };
+
+  var EASE_LAMBDA = 3.7;
+  var IDLE_MS = 3000;
+  var MAX_DT = 0.05;
+  var SHADER_TIME_SCALE = 0.42;
+  var MAX_DPR = 1.5;
+  var MIN_DPR = 0.75;
+  var SLOW_FRAME_MS = 28;
+  var FAST_FRAME_MS = 18;
+  var QUALITY_FRAMES = 45;
+
+  var VERT = "attribute vec2 aPos;void main(){gl_Position=vec4(aPos,0.,1.);}";
+
+  var FRAG = [
+    "#ifdef GL_FRAGMENT_PRECISION_HIGH",
+    "precision highp float;",
+    "#else",
+    "precision mediump float;",
+    "#endif",
+    "uniform vec2 uRes;uniform float uTime;uniform vec2 uCam;",
+    "uniform vec3 uColA;uniform vec3 uColM;uniform vec3 uColB;uniform vec3 uColC;",
+    "uniform float uAccOp;uniform float uCamDim;uniform float uEnvBoost;",
+    "const float BG_R=3.3137;const vec3 LENS_C=vec3(0.,1.28,-1.5);",
+    "const float LENS_R=1.4;const float TAN_F=.41421356;",
+    "float mod289(float x){return x-floor(x*(1./289.))*289.;}",
+    "vec4 mod289(vec4 x){return x-floor(x*(1./289.))*289.;}",
+    "vec4 perm(vec4 x){return mod289(((x*34.)+1.)*x);}",
+    "float noise(vec3 p){vec3 a=floor(p);vec3 d=p-a;d=d*d*(3.-2.*d);",
+    "vec4 b=a.xxyy+vec4(0.,1.,0.,1.);vec4 k1=perm(b.xyxy);vec4 k2=perm(k1.xyxy+b.zzww);",
+    "vec4 c=k2+a.zzzz;vec4 k3=perm(c);vec4 k4=perm(c+1.);",
+    "vec4 o1=fract(k3*(1./41.));vec4 o2=fract(k4*(1./41.));",
+    "vec4 o3=o2*d.z+o1*(1.-d.z);vec2 o4=o3.yw*d.x+o3.xz*(1.-d.x);",
+    "return o4.y*d.y+o4.x*(1.-d.y);}",
+    "float random(vec2 st){return fract(sin(dot(st.xy,vec2(12.9898,78.233)))*43758.5453123);}",
+    "mat2 rotate2d(float a){float c=cos(a);float s=sin(a);return mat2(c,-s,s,c);}",
+    "float lines(in vec2 pos,float b){pos*=10.;",
+    "return smoothstep(0.,.5+b*.5,abs((sin(pos.x*3.1415))+b*2.)*.5);}",
+    "vec3 bgShade(vec3 l){float bn=noise(l*2.6+uTime);",
+    "vec2 bp=rotate2d(bn)*l.xy*.2;",
+    "float b1=lines(bp,.5);float b2=lines(bp,.1);",
+    "vec3 bm=mix(mix(uColA,uColM,clamp(b1*2.,0.,1.)),uColB,clamp(b1*2.-1.,0.,1.));",
+    "return mix(bm,uColC,b2*uAccOp);}",
+    "float sphHit(vec3 oc,vec3 rd,float r2,float far){float b=dot(oc,rd);float h=b*b-(dot(oc,oc)-r2);",
+    "if(h<0.)return -1.;h=sqrt(h);if(far>0.5)return -b+h;float t=-b-h;if(t<0.)t=-b+h;return t;}",
+    "vec3 sampleBg(vec3 ro,vec3 rd,vec3 fw,vec3 fu,vec3 fv,float cam){",
+    "float t=sphHit(ro,rd,BG_R*BG_R,length(ro)<BG_R?1.:0.);",
+    "if(t<0.)return uColC;vec3 h=ro+rd*t;",
+    "vec3 l=vec3(dot(h,fu),dot(h,fv),dot(h,fw))/BG_R;",
+    "return bgShade(l)*mix(uEnvBoost,uCamDim,cam);}",
+    "void main(){",
+    "vec2 fr=gl_FragCoord.xy;",
+    "vec2 s=(fr-.5*uRes)/(.5*uRes.y);",
+    "vec3 ro=vec3(-uCam.x*.6,-uCam.y*.3,-4.);",
+    "vec3 f=normalize(-ro);",
+    "vec3 r=normalize(cross(f,vec3(0.,1.,0.)));",
+    "vec3 u=cross(r,f);",
+    "vec3 rd=normalize(f+TAN_F*(s.x*r+s.y*u));",
+    "vec3 fw=normalize(ro);",
+    "vec3 fu=normalize(cross(vec3(0.,1.,0.),fw));",
+    "vec3 fv=cross(fw,fu);",
+    "vec3 col;",
+    "float tL=sphHit(ro-LENS_C,rd,LENS_R*LENS_R,0.);",
+    "if(tL>0.){",
+    "vec3 p=ro+rd*tL;vec3 n=normalize(p-LENS_C);",
+    "float F=clamp(.016+2.442*pow(max(1.+dot(rd,n),0.),4.206),0.,1.);",
+    "vec3 rr=refract(rd,n,.014);vec3 rg=refract(rd,n,.016);vec3 rb=refract(rd,n,.018);",
+    "vec3 rc;",
+    "rc.r=sampleBg(LENS_C,rr,fw,fu,fv,0.).r;",
+    "rc.g=sampleBg(LENS_C,rg,fw,fu,fv,0.).g;",
+    "rc.b=sampleBg(LENS_C,rb,fw,fu,fv,0.).b;",
+    "vec3 through=sampleBg(ro,rd,fw,fu,fv,1.);",
+    "vec3 body=mix(through,rc,.75);",
+    "vec3 refl=sampleBg(LENS_C,reflect(rd,n),fw,fu,fv,0.);",
+    "col=mix(body,refl,F);",
+    "}else{",
+    "col=sampleBg(ro,rd,fw,fu,fv,1.);",
+    "}",
+    "col+=(random(fr*.75+fract(uTime*7.)*91.)-.5)*.10;",
+    "col*=smoothstep(-.95,.15,s.y);",
+    "gl_FragColor=vec4(col,1.);",
+    "}"
+  ].join("\n");
+
+  function showFallback(root, canvas, message) {
+    var p = document.createElement("p");
+    p.className = "pp-lens__fallback";
+    p.textContent = message;
+    if (canvas.parentNode) canvas.parentNode.replaceChild(p, canvas);
+  }
+
+  function compile(gl, type, src) {
+    var shader = gl.createShader(type);
+    if (!shader) return null;
+    gl.shaderSource(shader, src);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
     }
-  });
+    return shader;
+  }
+
+  function createProgram(gl) {
+    var vs = compile(gl, gl.VERTEX_SHADER, VERT);
+    var fs = compile(gl, gl.FRAGMENT_SHADER, FRAG);
+    if (!vs || !fs) {
+      if (vs) gl.deleteShader(vs);
+      if (fs) gl.deleteShader(fs);
+      return null;
+    }
+    var prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error(gl.getProgramInfoLog(prog));
+      gl.deleteProgram(prog);
+      return null;
+    }
+    return prog;
+  }
+
+  function initLens(root) {
+    if (!root || root.getAttribute(ROOT_ATTR)) return;
+
+    var canvas = root.querySelector(".pp-lens__canvas") || root.querySelector("canvas");
+    if (!canvas) return;
+    root.setAttribute(ROOT_ATTR, "1");
+
+    var gl = canvas.getContext("webgl", {
+      antialias: false,
+      alpha: false,
+      depth: false,
+      stencil: false,
+      premultipliedAlpha: false,
+      preserveDrawingBuffer: false,
+      powerPreference: "high-performance"
+    }) || canvas.getContext("experimental-webgl", {
+      antialias: false,
+      alpha: false,
+      depth: false,
+      stencil: false,
+      premultipliedAlpha: false,
+      preserveDrawingBuffer: false
+    });
+
+    if (!gl) {
+      showFallback(root, canvas, "WebGL wird nicht unterstützt.");
+      return;
+    }
+
+    var prog = createProgram(gl);
+    if (!prog) {
+      showFallback(root, canvas, "Der Shader konnte nicht geladen werden.");
+      return;
+    }
+
+    gl.useProgram(prog);
+
+    var buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    var loc = gl.getAttribLocation(prog, "aPos");
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+    function uni(name) {
+      return gl.getUniformLocation(prog, name);
+    }
+
+    var U = {
+      uRes: uni("uRes"),
+      uTime: uni("uTime"),
+      uCam: uni("uCam"),
+      uColA: uni("uColA"),
+      uColM: uni("uColM"),
+      uColB: uni("uColB"),
+      uColC: uni("uColC"),
+      uAccOp: uni("uAccOp"),
+      uCamDim: uni("uCamDim"),
+      uEnvBoost: uni("uEnvBoost")
+    };
+
+    gl.uniform3fv(U.uColA, PALETTE.A);
+    gl.uniform3fv(U.uColM, PALETTE.M);
+    gl.uniform3fv(U.uColB, PALETTE.B);
+    gl.uniform3fv(U.uColC, PALETTE.C);
+    gl.uniform1f(U.uAccOp, PALETTE.ACC);
+    gl.uniform1f(U.uCamDim, PALETTE.CD);
+    gl.uniform1f(U.uEnvBoost, PALETTE.EB);
+
+    var quality = 1;
+    var slowStreak = 0;
+    var fastStreak = 0;
+    var W = 0;
+    var H = 0;
+    var target = { x: 0, y: 0 };
+    var pos = { x: 0, y: 0 };
+    var lastMove = 0;
+    var shaderTime = 0;
+    var last = performance.now();
+    var raf = 0;
+    var running = false;
+    var lost = false;
+    var inView = true;
+
+    function hostSize() {
+      var w = root.clientWidth || canvas.clientWidth;
+      var h = root.clientHeight || canvas.clientHeight;
+      return { w: w, h: h };
+    }
+
+    function dprCap() {
+      var raw = window.devicePixelRatio || 1;
+      return Math.min(Math.max(raw, 1), MAX_DPR) * quality;
+    }
+
+    function resize() {
+      var size = hostSize();
+      var d = Math.max(MIN_DPR, dprCap());
+      var nextW = Math.max(1, Math.floor(size.w * d));
+      var nextH = Math.max(1, Math.floor(size.h * d));
+      if (nextW === W && nextH === H) return;
+      W = nextW;
+      H = nextH;
+      canvas.width = W;
+      canvas.height = H;
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      gl.uniform2f(U.uRes, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    }
+
+    function setTarget(clientX, clientY) {
+      var rect = root.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      target.x = ((clientX - rect.left) / rect.width - 0.5) * 2;
+      target.y = -((clientY - rect.top) / rect.height - 0.5) * 2;
+      lastMove = performance.now();
+    }
+
+    var reduceMotionQuery = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+    var reduceMotion = !!(reduceMotionQuery && reduceMotionQuery.matches);
+
+    function onReduceMotionChange() {
+      reduceMotion = !!(reduceMotionQuery && reduceMotionQuery.matches);
+    }
+
+    function adaptQuality(frameMs) {
+      if (frameMs > SLOW_FRAME_MS) {
+        slowStreak += 1;
+        fastStreak = 0;
+        if (slowStreak >= QUALITY_FRAMES && quality > MIN_DPR / MAX_DPR) {
+          quality = Math.max(MIN_DPR / MAX_DPR, quality * 0.85);
+          slowStreak = 0;
+          W = 0;
+          H = 0;
+          resize();
+        }
+      } else if (frameMs < FAST_FRAME_MS && quality < 1) {
+        fastStreak += 1;
+        slowStreak = 0;
+        if (fastStreak >= QUALITY_FRAMES) {
+          quality = Math.min(1, quality / 0.85);
+          fastStreak = 0;
+          W = 0;
+          H = 0;
+          resize();
+        }
+      } else {
+        slowStreak = 0;
+        fastStreak = 0;
+      }
+    }
+
+    function frame(now) {
+      raf = 0;
+      if (!running || lost) return;
+
+      var dt = Math.min((now - last) / 1000, MAX_DT);
+      var frameMs = now - last;
+      last = now;
+
+      if (!reduceMotion) {
+        shaderTime += SHADER_TIME_SCALE * dt;
+        if (now - lastMove > IDLE_MS) {
+          var t = now / 1000;
+          target.x = Math.cos(t * 0.3) * 0.6;
+          target.y = Math.sin(t * 0.23) * 0.5;
+        }
+      }
+
+      var ease = 1 - Math.exp(-EASE_LAMBDA * dt);
+      pos.x += (target.x - pos.x) * ease;
+      pos.y += (target.y - pos.y) * ease;
+
+      gl.uniform1f(U.uTime, shaderTime);
+      gl.uniform2f(U.uCam, pos.x, pos.y);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+      adaptQuality(frameMs);
+      raf = requestAnimationFrame(frame);
+    }
+
+    function start() {
+      if (running || lost || !inView || document.hidden) return;
+      running = true;
+      last = performance.now();
+      raf = requestAnimationFrame(frame);
+    }
+
+    function stop() {
+      running = false;
+      if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+    }
+
+    function syncPlayback() {
+      if (document.hidden || !inView) stop();
+      else start();
+    }
+
+    function onContextLost(e) {
+      e.preventDefault();
+      lost = true;
+      stop();
+    }
+
+    function onContextRestored() {
+      lost = false;
+      root.removeAttribute(ROOT_ATTR);
+      initLens(root);
+    }
+
+    function onPointer(e) {
+      setTarget(e.clientX, e.clientY);
+    }
+
+    function onTouch(e) {
+      var t = e.touches[0];
+      if (t) setTarget(t.clientX, t.clientY);
+    }
+
+    resize();
+
+    if (window.ResizeObserver) {
+      var ro = new ResizeObserver(resize);
+      ro.observe(root);
+    } else {
+      window.addEventListener("resize", resize);
+      if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
+    }
+
+    if (window.PointerEvent) {
+      window.addEventListener("pointermove", onPointer, { passive: true });
+    } else {
+      window.addEventListener("mousemove", onPointer, { passive: true });
+      window.addEventListener("touchmove", onTouch, { passive: true });
+    }
+
+    if (reduceMotionQuery) {
+      if (reduceMotionQuery.addEventListener) {
+        reduceMotionQuery.addEventListener("change", onReduceMotionChange);
+      } else if (reduceMotionQuery.addListener) {
+        reduceMotionQuery.addListener(onReduceMotionChange);
+      }
+    }
+
+    document.addEventListener("visibilitychange", syncPlayback);
+    canvas.addEventListener("webglcontextlost", onContextLost);
+    canvas.addEventListener("webglcontextrestored", onContextRestored);
+
+    if (window.IntersectionObserver) {
+      var io = new IntersectionObserver(function (entries) {
+        inView = entries.some(function (entry) { return entry.isIntersecting; });
+        syncPlayback();
+      }, { threshold: 0.01 });
+      io.observe(root);
+    }
+
+    syncPlayback();
+  }
+
+  function boot() {
+    var nodes = document.querySelectorAll("[data-pp-lens]");
+    if (!nodes.length) {
+      var canvas = document.getElementById("pp-lens-canvas");
+      if (canvas && canvas.parentNode) initLens(canvas.parentNode);
+      return;
+    }
+    for (var i = 0; i < nodes.length; i++) initLens(nodes[i]);
+  }
+
+  if (window.Webflow && typeof window.Webflow.push === "function") {
+    window.Webflow.push(boot);
+  } else if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+}
+
+function initNumberOdometer() {
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const initFlag = 'data-odometer-initialized'
+  const activeTweens = new WeakMap()
+
+  // Configuration
+  const defaults = {
+    duration: 1,
+    ease: 'power3.out',
+    elementStagger: 0.1,
+    digitStagger: 0.04,
+    revealDuration: 0.5,
+    revealEase: 'power2.out',
+    triggerStart: 'top 80%',
+    staggerOrder: 'left',
+    digitCycles: 2
+  }
+
+  // Scroll-triggered groups
+  document.querySelectorAll('[data-odometer-group]').forEach(group => {
+    if (group.hasAttribute(initFlag)) return
+    group.setAttribute(initFlag, '')
+
+    const elements = Array.from(group.querySelectorAll('[data-odometer-element]'))
+    if (!elements.length || prefersReducedMotion) return
+
+    const staggerOrder = group.getAttribute('data-odometer-stagger-order') || defaults.staggerOrder
+    const triggerStart = group.getAttribute('data-odometer-trigger-start') || defaults.triggerStart
+    const elementStagger = parseFloat(group.getAttribute('data-odometer-stagger')) || defaults.elementStagger
+
+    const elementData = elements.map(el => {
+      const originalText = el.textContent.trim()
+      const hasExplicitStart = el.hasAttribute('data-odometer-start')
+      const startValue = parseFloat(el.getAttribute('data-odometer-start')) || 0
+      const duration = parseFloat(el.getAttribute('data-odometer-duration')) || defaults.duration
+      const step = getLineHeightRatio(el)
+
+      let segments = parseSegments(originalText)
+      segments = mapStartDigits(segments, startValue)
+      segments = markHiddenSegments(segments, startValue)
+
+      const grow = shouldGrow(el, hasExplicitStart, startValue, segments)
+      const { rollers, revealEls } = buildRollerDOM(el, segments, step, grow)
+
+      const fontSize = parseFloat(getComputedStyle(el).fontSize)
+      const revealData = revealEls.map(revealEl => {
+        const widthEm = revealEl.offsetWidth / fontSize
+        gsap.set(revealEl, { width: 0, overflow: 'hidden' })
+        return { el: revealEl, widthEm }
+      })
+
+      return { el, rollers, duration, step, revealData, originalText }
+    })
+
+    const ordered = applyStaggerOrder(elementData, staggerOrder)
+
+    const tl = gsap.timeline({
+      scrollTrigger: {
+        trigger: group,
+        start: triggerStart,
+        once: true
+      },
+      onComplete() {
+        elementData.forEach(({ el, originalText, step }) => {
+          cleanupElement(el, originalText)
+        })
+      }
+    })
+
+    ordered.forEach((data, orderIdx) => {
+      const { rollers, duration, step, revealData } = data
+      const offset = orderIdx * elementStagger
+
+      revealData.forEach(({ el, widthEm }) => {
+        tl.to(el, {
+          width: widthEm + 'em',
+          opacity: 1,
+          duration: defaults.revealDuration,
+          ease: defaults.revealEase
+        }, offset)
+      })
+
+      rollers.forEach(({ roller, targetPos }, digitIdx) => {
+        const reversedIdx = rollers.length - 1 - digitIdx
+        tl.to(roller, {
+          y: -targetPos * step + 'em',
+          duration,
+          ease: defaults.ease,
+          force3D: true
+        }, offset + reversedIdx * defaults.digitStagger)
+      })
+    })
+  })
+
+  // Programmatic update (optional add-on)
+  return function updateOdometer(el, newText, options = {}) {
+    const currentText = el.textContent.trim()
+    if (currentText === newText) return
+
+    const duration = options.duration || defaults.duration
+    const ease = options.ease || defaults.ease
+    const step = getLineHeightRatio(el)
+
+    // Kill any running animation and clear its inline style locks
+    const existing = activeTweens.get(el)
+    if (existing) {
+      existing.kill()
+      gsap.set(el, { clearProps: 'width,overflow' })
+    }
+
+    // Measure current width before rebuilding (in em for responsive scaling)
+    const fontSize = parseFloat(getComputedStyle(el).fontSize)
+    const oldWidthEm = el.getBoundingClientRect().width / fontSize
+
+    // Parse current text as start, new text as end
+    const startSegments = parseSegments(currentText)
+    const startDigitsStr = startSegments
+      .filter(s => s.type === 'digit')
+      .map(s => s.char)
+      .join('')
+    const startValue = parseInt(startDigitsStr, 10) || 0
+
+    let segments = parseSegments(newText)
+    segments = mapStartDigits(segments, startValue)
+    segments = markHiddenSegments(segments, startValue)
+    const { rollers, revealEls } = buildRollerDOM(el, segments, step, true)
+
+    // Measure new natural width (in em)
+    const newWidthEm = el.getBoundingClientRect().width / fontSize
+    const widthChanged = Math.abs(oldWidthEm - newWidthEm) > 0.01
+
+    // Lock to old width for smooth transition
+    if (widthChanged) {
+      gsap.set(el, { width: oldWidthEm + 'em', overflow: 'hidden' })
+    }
+
+    const tl = gsap.timeline({
+      onComplete() {
+        cleanupElement(el, newText)
+        activeTweens.delete(el)
+      }
+    })
+    activeTweens.set(el, tl)
+
+    // Animate element width
+    if (widthChanged) {
+      tl.to(el, {
+        width: newWidthEm + 'em',
+        duration: defaults.revealDuration,
+        ease: defaults.revealEase
+      }, 0)
+    }
+
+    // Fade in hidden statics
+    revealEls.forEach(revealEl => {
+      if (revealEl.getAttribute('data-odometer-part') === 'static') {
+        tl.to(revealEl, { opacity: 1, duration: 0.2 }, 0)
+      }
+    })
+
+    // Roll digits
+    rollers.forEach(({ roller, targetPos }, digitIdx) => {
+      const reversedIdx = rollers.length - 1 - digitIdx
+      tl.to(roller, {
+        y: -targetPos * step + 'em',
+        duration,
+        ease,
+        force3D: true
+      }, reversedIdx * defaults.digitStagger)
+    })
+  }
+
+  // Helpers
+  function getLineHeightRatio(el) {
+    const cs = getComputedStyle(el)
+    const lh = cs.lineHeight
+    if (lh === 'normal') return 1.2
+    return parseFloat(lh) / parseFloat(cs.fontSize)
+  }
+
+  function parseSegments(text) {
+    return [...text].map(char => ({
+      type: /\d/.test(char) ? 'digit' : 'static',
+      char
+    }))
+  }
+
+  function mapStartDigits(segments, startValue) {
+    const digitSlots = segments.filter(s => s.type === 'digit')
+    const padded = String(Math.floor(Math.abs(startValue)))
+      .padStart(digitSlots.length, '0')
+      .slice(-digitSlots.length)
+    let di = 0
+    return segments.map(s =>
+      s.type === 'digit'
+        ? { ...s, startDigit: parseInt(padded[di++], 10) }
+        : s
+    )
+  }
+
+  function markHiddenSegments(segments, startValue) {
+    const totalDigits = segments.filter(s => s.type === 'digit').length
+    const absStart = Math.floor(Math.abs(startValue))
+    const startDigitCount = absStart === 0 ? 1 : String(absStart).length
+    const leadingZeros = Math.max(0, totalDigits - startDigitCount)
+    if (leadingZeros === 0) return segments
+    let digitsSeen = 0
+    let firstDigitSeen = false
+    let prevDigitHidden = false
+    return segments.map(seg => {
+      if (seg.type === 'digit') {
+        firstDigitSeen = true
+        const hidden = digitsSeen < leadingZeros
+        prevDigitHidden = hidden
+        digitsSeen++
+        return { ...seg, hidden }
+      }
+      const hidden = firstDigitSeen && prevDigitHidden
+      return { ...seg, hidden }
+    })
+  }
+
+  function shouldGrow(el, hasExplicitStart, startValue, segments) {
+    if (el.hasAttribute('data-odometer-grow')) {
+      return el.getAttribute('data-odometer-grow') !== 'false'
+    }
+    if (!hasExplicitStart) return false
+    const absStart = Math.floor(Math.abs(startValue))
+    const startDigitCount = absStart === 0 ? 1 : String(absStart).length
+    const endDigitCount = segments.filter(s => s.type === 'digit').length
+    return startDigitCount < endDigitCount
+  }
+
+  function buildRollerDOM(el, segments, step, grow) {
+    el.innerHTML = ''
+    el.style.height = ''
+    const rollers = []
+    const revealEls = []
+    const totalCells = 10 * defaults.digitCycles
+    segments.forEach(seg => {
+      if (seg.type === 'static') {
+        const span = document.createElement('span')
+        span.setAttribute('data-odometer-part', 'static')
+        span.style.height = step + 'em'
+        span.style.lineHeight = step
+        span.textContent = seg.char
+        el.appendChild(span)
+        if (grow && seg.hidden) {
+          gsap.set(span, { opacity: 0 })
+          revealEls.push(span)
+        }
+        return
+      }
+      const mask = document.createElement('span')
+      mask.setAttribute('data-odometer-part', 'mask')
+      mask.style.height = step + 'em'
+      mask.style.lineHeight = step
+      const roller = document.createElement('span')
+      roller.setAttribute('data-odometer-part', 'roller')
+      roller.style.lineHeight = step
+
+      const digits = []
+      for (let d = 0; d < totalCells; d++) {
+        digits.push(d % 10)
+      }
+      roller.textContent = digits.join('\n')
+      mask.appendChild(roller)
+      el.appendChild(mask)
+      const startDigit = seg.startDigit || 0
+      const isReveal = grow && seg.hidden
+      gsap.set(roller, { y: isReveal ? step + 'em' : -startDigit * step + 'em' })
+      const endDigit = parseInt(seg.char, 10)
+      const targetPos = endDigit > startDigit ? endDigit : 10 + endDigit
+      rollers.push({ roller, targetPos })
+      if (isReveal) revealEls.push(mask)
+    })
+    return { rollers, revealEls }
+  }
+
+  function cleanupElement(el, originalText) {
+    el.style.overflow = ''
+    el.style.height = ''
+
+    // Remove rollers, set final digit, clear inline bloat (but preserve width)
+    const digits = [...originalText].filter(c => /\d/.test(c))
+    let di = 0
+
+    el.querySelectorAll('[data-odometer-part="mask"]').forEach(mask => {
+      const roller = mask.querySelector('[data-odometer-part="roller"]')
+      if (roller) roller.remove()
+      mask.textContent = digits[di++] || ''
+      mask.style.opacity = ''
+      mask.style.overflow = ''
+    })
+
+    el.querySelectorAll('[data-odometer-part="static"]').forEach(stat => {
+      stat.style.opacity = ''
+    })
+  }
+
+  function recalcOnResize() {
+    document.querySelectorAll('[data-odometer-element]').forEach(el => {
+      // Force-complete any running programmatic animation
+      const running = activeTweens.get(el)
+      if (running) {
+        running.progress(1)
+        activeTweens.delete(el)
+      }
+
+      const hasRollers = el.querySelector('[data-odometer-part="roller"]')
+
+      if (hasRollers) {
+        // Pre-triggered: recalculate step-based inline styles
+        const step = getLineHeightRatio(el)
+        el.querySelectorAll('[data-odometer-part="mask"]').forEach(mask => {
+          mask.style.height = step + 'em'
+          mask.style.lineHeight = step
+        })
+        el.querySelectorAll('[data-odometer-part="roller"]').forEach(roller => {
+          roller.style.lineHeight = step
+        })
+        el.querySelectorAll('[data-odometer-part="static"]').forEach(stat => {
+          stat.style.lineHeight = step
+        })
+      }
+      // Completed elements: width is em-based, scales automatically, don't touch
+    })
+    ScrollTrigger.refresh()
+  }
+
+  let resizeTimer
+  let lastWidth = window.innerWidth
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(() => {
+      if (window.innerWidth === lastWidth) return
+      lastWidth = window.innerWidth
+      recalcOnResize()
+    }, 250)
+  })
+
+  function applyStaggerOrder(items, order) {
+    const arr = [...items]
+    if (order === 'right') return arr.reverse()
+    if (order === 'random') return shuffleArray(arr)
+    return arr
+  }
+
+  function shuffleArray(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[arr[i], arr[j]] = [arr[j], arr[i]]
+    }
+    return arr
+  }
 }
