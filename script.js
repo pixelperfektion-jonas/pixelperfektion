@@ -4883,3 +4883,17 @@ function initNumberOdometer() {
     return arr
   }
 }
+
+function initProcessNumbers() {
+  const processItems = document.querySelectorAll('.process-item');
+  if (!processItems) return;
+
+  processItems.forEach((item, index) => {
+      const numberElement = item.querySelector('.process-number');
+
+      if (numberElement) {
+          const number = index + 1;
+          numberElement.textContent = String(number).padStart(2, '0');
+      }
+  });
+}
