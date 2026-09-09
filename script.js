@@ -83,6 +83,8 @@ function initBeforeEnterFunctions(next) {
   if (has(".ufo-img")) prepareUfoAnimation();
   if (has("[data-current-year]")) initDynamicCurrentYear();
   if (has(".seo-header")) initSeoHeaderLoader();
+  if (has("[data-pp-lens]")) initPpLens();
+  if (has(".process-item")) initProcessNumbers();
 }
 
 function initAfterEnterFunctions(next) {
@@ -111,8 +113,8 @@ function initAfterEnterFunctions(next) {
   if (has("[data-camera-timecode]")) initCameraTimecode();
   if (has(".hero-slide")) initHeroParallaxSlider();
   if (has("[data-reveal-group]")) initContentRevealScroll();
-  if (has(".process-item")) initProcessNumbers();
   if (has("[data-odometer-group]")) initNumberOdometer();
+  if (has("[data-swiper-homebase]")) initHomebaseSlider();
 
   if (hasLenis && lenis) {
     lenis.resize();
@@ -314,7 +316,7 @@ barba.hooks.afterEnter((data) => {
 });
 
 barba.init({
-  debug: true, // Set to 'false' in production
+  debug: false, // Set to 'false' in production
   timeout: 7000,
   preventRunning: true,
   transitions: [
@@ -1662,6 +1664,9 @@ function initSeoHeaderLoader() {
   const headingStart = container.querySelectorAll(".seo__h1-start");
   const headingEnd = container.querySelectorAll(".seo__h1-end");
   const coverImageExtra = container.querySelectorAll(".seo__cover-image-extra");
+  
+  // Neues Eyebrow-Element selektieren
+  const heroEyebrow = container.querySelector(".reviews-eyebrow-w");
   const heroHeadline = container.querySelector(".seo-heading");
   const heroParagraph = container.querySelector(".seo__p");
   const heroCTA = container.querySelector(".cta-button");
@@ -1673,6 +1678,8 @@ function initSeoHeaderLoader() {
   if (hasSeoHeaderAnimated) {
     container.classList.remove("is--hidden", "is--loading");
 
+    // Falls die Animation schon lief: Eyebrow ebenfalls direkt sichtbar machen
+    if (heroEyebrow) gsap.set(heroEyebrow, { clearProps: "all" });
     if (heroCTA) gsap.set(heroCTA, { clearProps: "all" });
 
     if (box.length) gsap.set(box, { width: "110vw" });
@@ -1780,6 +1787,25 @@ function initSeoHeaderLoader() {
           },
         },
         "-=1"
+      );
+    }
+
+    // Eyebrow Animation: Startet kurz VOR der Headline (-=2.0)
+    if (heroEyebrow) {
+      tl.fromTo(
+        heroEyebrow,
+        {
+          yPercent: 50,
+          opacity: 0,
+        },
+        {
+          yPercent: 0,
+          opacity: 1,
+          duration: 1.2,
+          ease: "expo.out",
+          clearProps: "transform",
+        },
+        "-=1.8"
       );
     }
 
@@ -1971,6 +1997,69 @@ function initSwiperSlider() {
     instances: swiperInstances,
     update: updateAllGaps,
   };
+}
+
+function initHomebaseSlider() {
+  const homebaseSliders = nextPage.querySelectorAll("[data-swiper-homebase]");
+  if (!homebaseSliders.length) return;
+
+  const isDesktop = window.matchMedia("(min-width: 992px)").matches;
+
+  homebaseSliders.forEach((sliderEl) => {
+    const swiperGroup = sliderEl.closest("[data-swiper-group]");
+    const pagination = swiperGroup ? swiperGroup.querySelector("[data-swiper-pagination]") : null;
+
+    const swiper = new Swiper(sliderEl, {
+      slidesPerView: 1,
+      spaceBetween: 0,
+      loop: true,
+      speed: 800,
+      grabCursor: true,
+      autoplay: isDesktop ? {
+        delay: 3500,
+        disableOnInteraction: false,
+      } : false,
+      pagination: pagination ? {
+        el: pagination,
+        type: "bullets",
+        clickable: false,
+        dynamicBullets: true,
+        dynamicMainBullets: 2,
+      } : false,
+      on: {
+        init: function () {
+          if (this.autoplay && this.autoplay.stop) {
+            this.autoplay.stop();
+          }
+        },
+      },
+    });
+
+    if (isDesktop) {
+      const stopAutoplaySafely = () => {
+        if (!swiper.autoplay) return;
+        if (swiper.animating) {
+          swiper.once('transitionEnd', () => swiper.autoplay.stop());
+        } else {
+          swiper.autoplay.stop();
+        }
+      };
+
+      if (typeof ScrollTrigger !== "undefined") {
+        ScrollTrigger.create({
+          trigger: sliderEl,
+          start: "top 80%",
+          end: "bottom 20%",
+          onEnter: () => swiper.autoplay.start(),
+          onLeave: stopAutoplaySafely,
+          onEnterBack: () => swiper.autoplay.start(),
+          onLeaveBack: stopAutoplaySafely,
+        });
+      } else {
+        swiper.autoplay.start();
+      }
+    }
+  });
 }
 
 function initTOC() {
@@ -4886,7 +4975,7 @@ function initNumberOdometer() {
 
 function initProcessNumbers() {
   const processItems = document.querySelectorAll('.process-item');
-  if (!processItems) return;
+  if (!processItems.length) return;
 
   processItems.forEach((item, index) => {
       const numberElement = item.querySelector('.process-number');
