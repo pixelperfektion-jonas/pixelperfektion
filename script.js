@@ -83,7 +83,6 @@ function initBeforeEnterFunctions(next) {
   if (has(".ufo-img")) prepareUfoAnimation();
   if (has("[data-current-year]")) initDynamicCurrentYear();
   if (has(".seo-header")) initSeoHeaderLoader();
-  if (has("[data-pp-lens]")) initPpLens();
   if (has(".process-item")) initProcessNumbers();
 }
 
