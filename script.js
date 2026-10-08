@@ -109,7 +109,6 @@ function initAfterEnterFunctions(next) {
   if (has(".ufo-img")) startUfoAnimation();
   if (has("[data-split-scrub]")) initSplitTextScrub();
   if (has("[data-footer-parallax]")) initFooterParallax();
-  if (has("[data-camera-timecode]")) initCameraTimecode();
   if (has(".hero-slide")) initHeroParallaxSlider();
   if (has("[data-reveal-group]")) initContentRevealScroll();
   if (has("[data-odometer-group]")) initNumberOdometer();
