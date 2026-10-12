@@ -100,6 +100,7 @@ function initAfterEnterFunctions(next) {
   if (has(".archive-list-wrapper")) initArchivePreview();
   if (has(".project__btn")) initProjectButtons();
   if (has('[data-tabs="wrapper"]')) initTabSystem();
+  if (has('[data-numbered-tabs="wrapper"]')) initNumberedTabs();
   if (has(".mwg023")) initImageWall();
   if (has("[data-marquee-scroll-direction-target]"))
     initMarqueeScrollDirection();
@@ -2509,6 +2510,416 @@ function initTabSystem() {
     );
   });
 }
+
+// Numbered tabs: normal Webflow elements, separate from the existing tabs/filter.
+function initNumberedTabs() {
+  const wrappers = nextPage.querySelectorAll('[data-numbered-tabs="wrapper"]');
+
+  wrappers.forEach((wrapper) => {
+    if (wrapper.hasAttribute("data-numbered-tabs-initialized")) return;
+
+    const menu = wrapper.querySelector('[data-numbered-tabs="menu"]');
+    const panels = Array.from(wrapper.querySelectorAll('[data-numbered-tabs-panel]'));
+    const buttons = Array.from(wrapper.querySelectorAll('[data-numbered-tabs-target]'));
+    const pill = menu?.querySelector('[data-numbered-tabs="pill"]');
+
+    const keys = panels.map((panel) => panel.getAttribute("data-numbered-tabs-panel"));
+    const targets = buttons.map((button) => button.getAttribute("data-numbered-tabs-target"));
+    if (!menu || !buttons.length || panels.length !== buttons.length ||
+      keys.some((key) => !key) || new Set(keys).size !== keys.length ||
+      new Set(targets).size !== targets.length ||
+      buttons.some((button) => button.tagName !== "BUTTON" || !menu.contains(button)) ||
+      targets.some((key) => !keys.includes(key))) {
+      console.warn("Numbered tabs: check the menu, buttons and matching panel/target values.", wrapper);
+      return;
+    }
+
+    const orderedPanels = targets.map((key) => panels[keys.indexOf(key)]);
+    const elements = [wrapper, menu, ...buttons, ...panels, ...(pill ? [pill] : [])];
+    const savedAttributes = elements.map((element) => [
+      element, Array.from(element.attributes, ({ name, value }) => [name, value])
+    ]);
+    const displayValues = panels.map((panel) => ({
+      panel, value: panel.style.getPropertyValue("display"),
+      priority: panel.style.getPropertyPriority("display"),
+    }));
+    const listeners = [];
+    const listen = (el, event, handler) => {
+      el.addEventListener(event, handler);
+      listeners.push(() => el.removeEventListener(event, handler));
+    };
+
+    initNumberedTabs.instanceCount = (initNumberedTabs.instanceCount || 0) + 1;
+    let prefix = `numbered-tabs-${initNumberedTabs.instanceCount}`;
+    while (buttons.some((_, index) => document.getElementById(`${prefix}-tab-${index + 1}`)) ||
+      panels.some((_, index) => document.getElementById(`${prefix}-panel-${index + 1}`))) {
+      prefix += "-new";
+    }
+
+    const animation = createNumberedTabsAnimation(orderedPanels);
+    let activeIndex = 0;
+    let isAnimating = false;
+    let pendingIndex = null;
+    let autoplayTimer = null;
+    let hovering = false;
+    let focused = false;
+    let pillTarget = buttons[0];
+    let destroyed = false;
+    let inView = typeof IntersectionObserver === "undefined";
+    let snapPill = true;
+    let pillX = 0, pillY = 0;
+    let velX = 0, velY = 0;
+
+    wrapper.setAttribute("data-numbered-tabs-initialized", "true");
+    menu.setAttribute("role", "tablist");
+    menu.setAttribute("aria-orientation", "horizontal");
+    if (!menu.hasAttribute("aria-label") && !menu.hasAttribute("aria-labelledby")) {
+      menu.setAttribute("aria-label", "Inhalte auswählen");
+    }
+    buttons.forEach((button, index) => {
+      const panel = orderedPanels[index];
+      button.type = "button";
+      button.id = `${prefix}-tab-${index + 1}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-controls", `${prefix}-panel-${index + 1}`);
+      panel.id = `${prefix}-panel-${index + 1}`;
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", button.id);
+      panel.setAttribute("tabindex", "0");
+    });
+    if (pill) {
+      pill.setAttribute("aria-hidden", "true");
+      pill.style.pointerEvents = "none";
+    }
+
+    function setPanelVisible(panel, visible) {
+      panel.hidden = !visible;
+      panel.inert = !visible;
+      panel.setAttribute("aria-hidden", String(!visible));
+      if (!visible) panel.style.setProperty("display", "none", "important");
+      else {
+        const saved = displayValues.find((entry) => entry.panel === panel);
+        if (saved.value) panel.style.setProperty("display", saved.value, saved.priority);
+        else panel.style.removeProperty("display");
+      }
+    }
+
+    function refreshLayout() {
+      if (destroyed) return;
+      if (hasLenis && lenis) lenis.resize();
+      if (hasScrollTrigger) ScrollTrigger.refresh();
+    }
+
+    function setPillTarget(button) {
+      pillTarget = button;
+      buttons.forEach((item) => {
+        const target = item === button;
+        item.classList.toggle("is-pill-target", target);
+        if (target) item.setAttribute("data-numbered-tabs-pill-target", "");
+        else item.removeAttribute("data-numbered-tabs-pill-target");
+      });
+    }
+
+    // Same spring values as initFilter(), with a removable ticker callback.
+    function updatePill() {
+      if (!pill || !pillTarget || destroyed || !inView) return;
+      const menuRect = menu.getBoundingClientRect();
+      const btnRect = pillTarget.getBoundingClientRect();
+      if (!btnRect.width || !menuRect.width) return;
+      // Account for scroll, borders and ancestor scaling (e.g. reveal effects).
+      const scaleX = menuRect.width / menu.offsetWidth || 1;
+      const scaleY = menuRect.height / menu.offsetHeight || 1;
+      const targetX = (btnRect.left - menuRect.left) / scaleX + menu.scrollLeft - menu.clientLeft;
+      const targetY = (btnRect.top - menuRect.top) / scaleY + menu.scrollTop - menu.clientTop;
+      if (snapPill || reducedMotion) {
+        pillX = targetX; pillY = targetY;
+        velX = velY = 0;
+        snapPill = false;
+      } else {
+        const dt = Math.min(gsap.ticker.deltaRatio(), 2);
+        const stiffness = 0.125;
+        const damping = 0.625;
+        velX = (velX + (targetX - pillX) * stiffness * dt) * damping;
+        velY = (velY + (targetY - pillY) * stiffness * dt) * damping;
+        pillX += velX * dt; pillY += velY * dt;
+      }
+      gsap.set(pill, { x: pillX, y: pillY, opacity: 1 });
+    }
+
+    function updateSelection(index) {
+      buttons.forEach((button, i) => {
+        const active = i === index;
+        button.setAttribute("aria-selected", String(active));
+        button.setAttribute("tabindex", active ? "0" : "-1");
+        button.setAttribute("data-numbered-tabs-status", active ? "active" : "not-active");
+        button.classList.toggle("is-active", active);
+        orderedPanels[i].classList.toggle("is-active", active);
+      });
+      setPillTarget(buttons[index]);
+    }
+
+    function stopAutoplay() {
+      clearTimeout(autoplayTimer);
+      autoplayTimer = null;
+    }
+
+    function scheduleAutoplay() {
+      stopAutoplay();
+      if (destroyed || isAnimating || hovering || focused || !inView ||
+        document.hidden || reducedMotion || buttons.length < 2) return;
+      autoplayTimer = setTimeout(() => {
+        autoplayTimer = null;
+        switchTab((activeIndex + 1) % buttons.length);
+      }, 6000);
+    }
+
+    function finishSwitch() {
+      isAnimating = false;
+      const nextIndex = pendingIndex;
+      pendingIndex = null;
+      if (nextIndex !== null && nextIndex !== activeIndex) switchTab(nextIndex);
+      else scheduleAutoplay();
+    }
+
+    function requestTab(index) {
+      stopAutoplay();
+      if (isAnimating) {
+        // Keep only the last click; finish the current animation first.
+        pendingIndex = index;
+        return;
+      }
+      if (index === activeIndex) scheduleAutoplay();
+      else switchTab(index);
+    }
+
+    function switchTab(index) {
+      if (destroyed || isAnimating || index === activeIndex) return;
+      stopAutoplay();
+      isAnimating = true;
+      animation.reset();
+      const outgoing = orderedPanels[activeIndex];
+      const incoming = orderedPanels[index];
+      // Normalize an interrupted transition before starting the next one.
+      panels.forEach((panel) => setPanelVisible(panel, panel === outgoing));
+      if (outgoing.contains(document.activeElement)) buttons[index].focus({ preventScroll: true });
+      outgoing.inert = true;
+      outgoing.setAttribute("aria-hidden", "true");
+      activeIndex = index;
+      updateSelection(index);
+      const completeSwitch = () => {
+        panels.forEach((panel) => setPanelVisible(panel, panel === incoming));
+        animation.reset();
+        refreshLayout();
+        finishSwitch();
+      };
+      if (reducedMotion) {
+        completeSwitch();
+        return;
+      }
+
+      setPanelVisible(incoming, true);
+      animation.play(outgoing, incoming, completeSwitch);
+      refreshLayout();
+    }
+
+    buttons.forEach((button, index) => {
+      listen(button, "click", () => requestTab(index));
+      listen(button, "mouseenter", () => setPillTarget(button));
+      listen(button, "focus", () => setPillTarget(button));
+      listen(button, "keydown", (event) => {
+        let targetIndex;
+        const rtl = getComputedStyle(menu).direction === "rtl";
+        if (event.key === "ArrowRight") targetIndex = (index + (rtl ? -1 : 1) + buttons.length) % buttons.length;
+        if (event.key === "ArrowLeft") targetIndex = (index + (rtl ? 1 : -1) + buttons.length) % buttons.length;
+        if (event.key === "Home") targetIndex = 0;
+        if (event.key === "End") targetIndex = buttons.length - 1;
+        if (targetIndex === undefined) return;
+        event.preventDefault();
+        buttons.forEach((item, i) => item.tabIndex = i === targetIndex ? 0 : -1);
+        buttons[targetIndex].focus({ preventScroll: true });
+        // Manual activation: Enter/Space use the native button click.
+      });
+    });
+    listen(menu, "mouseleave", () => setPillTarget(
+      buttons.includes(document.activeElement) ? document.activeElement : buttons[activeIndex]
+    ));
+    listen(menu, "focusout", (event) => {
+      if (!menu.contains(event.relatedTarget)) {
+        buttons.forEach((button, index) => button.tabIndex = index === activeIndex ? 0 : -1);
+        setPillTarget(buttons[activeIndex]);
+      }
+    });
+    listen(window, "resize", () => { snapPill = true; });
+    listen(wrapper, "mouseenter", () => { hovering = true; stopAutoplay(); });
+    listen(wrapper, "mouseleave", () => { hovering = false; scheduleAutoplay(); });
+    listen(wrapper, "focusin", () => { focused = true; stopAutoplay(); });
+    listen(wrapper, "focusout", (event) => {
+      if (!wrapper.contains(event.relatedTarget)) {
+        focused = false;
+        scheduleAutoplay();
+      }
+    });
+    listen(document, "visibilitychange", scheduleAutoplay);
+
+    panels.forEach((panel) => setPanelVisible(panel, panel === orderedPanels[0]));
+    updateSelection(0);
+    const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    listen(motionQuery, "change", (event) => {
+      if (event.matches) {
+        animation.reset();
+        panels.forEach((panel) => setPanelVisible(panel, panel === orderedPanels[activeIndex]));
+        snapPill = true;
+        updatePill();
+        finishSwitch();
+      }
+      scheduleAutoplay();
+    });
+    updatePill();
+    if (pill) gsap.ticker.add(updatePill);
+    const visibilityObserver = typeof IntersectionObserver !== "undefined"
+      ? new IntersectionObserver(([entry]) => {
+        inView = entry.isIntersecting;
+        if (inView) { snapPill = true; updatePill(); }
+        scheduleAutoplay();
+      }, { threshold: 0.25 }) : null;
+    visibilityObserver?.observe(wrapper);
+    scheduleAutoplay();
+
+    registerCleanup(() => {
+      destroyed = true;
+      pendingIndex = null;
+      stopAutoplay();
+      animation.destroy();
+      gsap.ticker.remove(updatePill);
+      if (pill) gsap.killTweensOf(pill);
+      visibilityObserver?.disconnect();
+      listeners.forEach((remove) => remove());
+      savedAttributes.forEach(([element, attributes]) => {
+        Array.from(element.attributes).forEach(({ name }) => element.removeAttribute(name));
+        attributes.forEach(([name, value]) => element.setAttribute(name, value));
+      });
+    });
+  });
+}
+
+// Only the text/media choreography of a tab switch; no scroll reveal.
+function createNumberedTabsAnimation(panels) {
+  // Use the prototype's inline word masks, preserving Rich Text markup.
+  const splits = [];
+  const splitWords = (element) => {
+    if (!element) return [];
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    const words = [];
+    nodes.forEach((node) => {
+      if (!node.textContent.trim()) return;
+      const fragment = document.createDocumentFragment();
+      const replacements = [];
+      node.textContent.split(/(\s+)/).filter(Boolean).forEach((part) => {
+        let replacement;
+        if (/^\s+$/.test(part)) {
+          replacement = document.createTextNode(part);
+        } else {
+          const mask = document.createElement("span");
+          mask.className = "numbered-word-mask";
+          mask.style.cssText = "display:inline-block;overflow:clip;vertical-align:top;padding-bottom:.08em;margin-bottom:-.08em";
+          const word = document.createElement("span");
+          word.className = "numbered-word";
+          word.style.cssText = "display:inline-block;will-change:transform";
+          word.textContent = part;
+          mask.appendChild(word);
+          words.push(word);
+          replacement = mask;
+        }
+        replacements.push(replacement);
+        fragment.appendChild(replacement);
+      });
+      const parent = node.parentNode;
+      parent.replaceChild(fragment, node);
+      splits.push(() => {
+        if (replacements[0].parentNode !== parent) return;
+        parent.insertBefore(node, replacements[0]);
+        replacements.forEach((replacement) => replacement.remove());
+      });
+    });
+    return words;
+  };
+  const effects = panels.map((panel) => ({
+    panel,
+    titleWords: splitWords(panel.querySelector(".numbered-card__title")),
+    textWords: splitWords(panel.querySelector(".numbered-card__text")),
+    media: panel.querySelector(".numbered-card__image-wrapper"),
+    copy: panel.querySelector(".numbered-card__content"),
+    inner: panel.querySelector(".numbered-card__image"),
+    extras: Array.from(panel.querySelectorAll(".numbered-card__cta")),
+  }));
+  const extraTargets = effects.flatMap((effect) => [effect.media, effect.inner, effect.copy, ...effect.extras]).filter(Boolean);
+  const effectStyles = extraTargets.map((el) => [el, el.getAttribute("style")]);
+  const allWords = effects.flatMap((effect) => [...effect.titleWords, ...effect.textWords]);
+  let timeline = null;
+
+  function reset() {
+    timeline?.kill();
+    timeline = null;
+    effects.forEach((effect) => {
+      gsap.set([...effect.titleWords, ...effect.textWords], { yPercent: 0, opacity: 1 });
+      if (effect.media) gsap.set(effect.media, { clipPath: "inset(0% 0% 0% 0%)" });
+      if (effect.inner) gsap.set(effect.inner, { scale: 1, y: 0, opacity: 1 });
+      gsap.set(effect.extras, { y: 0, autoAlpha: 1 });
+      if (effect.copy) gsap.set(effect.copy, { clearProps: "visibility" });
+      gsap.set(effect.panel, { zIndex: 0, clearProps: "transform,backgroundColor" });
+    });
+  }
+
+  function play(outgoing, incoming, onComplete) {
+    const oldEffect = effects[panels.indexOf(outgoing)];
+    const newEffect = effects[panels.indexOf(incoming)];
+    // Both cards share one grid area so the incoming media can wipe over
+    // the outgoing media without duplicating or rewriting text content.
+    gsap.set(incoming, { zIndex: 2, backgroundColor: "transparent" });
+    if (newEffect.copy) gsap.set(newEffect.copy, { visibility: "visible" });
+    gsap.set([...newEffect.titleWords, ...newEffect.textWords], { yPercent: 110, opacity: 1 });
+    gsap.set(newEffect.extras, { y: 12, autoAlpha: 0 });
+    if (newEffect.media) gsap.set(newEffect.media, { clipPath: "inset(100% 0% 0% 0%)" });
+    if (newEffect.inner) gsap.set(newEffect.inner, { scale: 1.12, y: -40 });
+    timeline = gsap.timeline({ onComplete });
+    if (newEffect.media) timeline.to(newEffect.media, {
+      clipPath: "inset(0% 0% 0% 0%)", duration: 1.1, ease: "expo.inOut"
+    }, 0);
+    if (newEffect.inner) timeline.to(newEffect.inner, {
+      scale: 1, y: 0, duration: 1.1, ease: "expo.inOut"
+    }, 0);
+    if (oldEffect.inner) timeline.to(oldEffect.inner, {
+      scale: 1.06, opacity: 0.55, duration: 1.1, ease: "expo.inOut"
+    }, 0);
+    timeline.to([...oldEffect.titleWords, ...oldEffect.textWords], {
+      yPercent: -60, opacity: 0, duration: 0.35, ease: "power2.in", stagger: 0.002
+    }, 0)
+      .add(() => { if (oldEffect.copy) gsap.set(oldEffect.copy, { visibility: "hidden" }); }, 0.5)
+      .to(oldEffect.extras, { autoAlpha: 0, duration: 0.2 }, 0)
+      .to(newEffect.titleWords, {
+        yPercent: 0, opacity: 1, duration: 0.9, ease: "expo.out", stagger: 0.03
+      }, 0.45)
+      .to(newEffect.textWords, {
+        yPercent: 0, opacity: 1, duration: 0.9, ease: "expo.out", stagger: 0.008
+      }, 0.53)
+      .to(newEffect.extras, { y: 0, autoAlpha: 1, duration: 0.6, ease: "expo.out", stagger: 0.08 }, 0.7);
+  }
+
+  function destroy() {
+    timeline?.kill();
+    gsap.killTweensOf([...allWords, ...extraTargets, ...panels]);
+    splits.forEach((revert) => revert());
+    effectStyles.forEach(([el, style]) => {
+      if (style === null) el.removeAttribute("style");
+      else el.setAttribute("style", style);
+    });
+  }
+
+  return { play, reset, destroy };
+}
+
 
 function initFilter() {
   const filterWrappers = nextPage.querySelectorAll(
